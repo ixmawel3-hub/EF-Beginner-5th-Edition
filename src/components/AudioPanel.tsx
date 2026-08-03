@@ -134,7 +134,6 @@ export default function AudioPanel({ bookTitle, onClose }: Props) {
                 // unwind
                 const toCombine = stack.splice(i)
                 node = toCombine.shift()!
-                const combinedChildren = [node.children]
                 // append remaining as text
                 for (const rem of toCombine) {
                   node.children.push(...rem.children)
