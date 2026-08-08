@@ -4,15 +4,64 @@ type RegisteredUser = {
   livros?: string[]
 }
 
-const REMOTE_USERS_URL = 'https://ixmawel3-hub.github.io/EnglishBooks/assets/data/efb5e.json'
+const FALLBACK_REMOTE_USERS_URL = 'https://ixmawel3-hub.github.io/EnglishBooks/assets/data/efb5e.json'
+
+// Vite environment variables (define in .env or .env.local):
+// VITE_GOOGLE_FILE_ID, VITE_GOOGLE_API_KEY and VITE_BOOK_ID
+const GOOGLE_FILE_ID = (import.meta.env.VITE_GOOGLE_FILE_ID as string) || ''
+const GOOGLE_API_KEY = (import.meta.env.VITE_GOOGLE_API_KEY as string) || ''
+const BOOK_ID = (import.meta.env.VITE_BOOK_ID as string) || ''
+
+const buildGoogleDriveUrl = (fileId?: string, apiKey?: string) => {
+  if (!fileId || !apiKey) return null
+  // Drive API v3 media endpoint (returns file contents). File must be shared appropriately.
+  return `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&key=${encodeURIComponent(apiKey)}`
+}
+
+const extractUsersFromData = (data: any): any[] => {
+  if (!data) return []
+  // Legacy single-book format: { usuarios: [...] }
+  if (data.usuarios && Array.isArray(data.usuarios)) return data.usuarios
+
+  // New multi-book formats:
+  // 1) top-level keyed by book id: { "efb5e": { usuarios: [...] }, ... }
+  if (BOOK_ID && data[BOOK_ID] && Array.isArray(data[BOOK_ID].usuarios)) return data[BOOK_ID].usuarios
+
+  // 2) nested under `books` object: { books: { efb5e: { usuarios: [...] } } }
+  if (BOOK_ID && data.books && data.books[BOOK_ID] && Array.isArray(data.books[BOOK_ID].usuarios)) return data.books[BOOK_ID].usuarios
+
+  // 3) if the data itself is an array (legacy list)
+  if (Array.isArray(data)) return data
+
+  // 4) try to find any value that contains `usuarios`
+  for (const val of Object.values(data)) {
+    if (val && typeof val === 'object' && Array.isArray((val as any).usuarios)) return (val as any).usuarios
+  }
+
+  return []
+}
 
 const loadRemoteUsers = async (): Promise<any[]> => {
-  // Always fetch remote resource and add a cache-busting param to avoid CDN/browser cache.
-  const url = `${REMOTE_USERS_URL}?_=${Date.now()}`
+  // Prefer Google Drive if both file id and api key are present
+  const driveUrl = buildGoogleDriveUrl(GOOGLE_FILE_ID, GOOGLE_API_KEY)
+  const url = driveUrl ? `${driveUrl}&_=${Date.now()}` : `${FALLBACK_REMOTE_USERS_URL}?_=${Date.now()}`
+
+  // Try fetching the chosen URL. If Google Drive fails and we attempted it, try the fallback once.
   const res = await fetch(url)
-  if (!res.ok) throw new Error('remote fetch failed')
+  if (!res.ok) {
+    if (driveUrl) {
+      // try fallback URL
+      const fallbackUrl = `${FALLBACK_REMOTE_USERS_URL}?_=${Date.now()}`
+      const fbRes = await fetch(fallbackUrl)
+      if (!fbRes.ok) throw new Error('remote fetch failed (google drive and fallback)')
+      const data = await fbRes.json()
+      return extractUsersFromData(data)
+    }
+    throw new Error('remote fetch failed')
+  }
+
   const data = await res.json()
-  return data && data.usuarios ? data.usuarios : (Array.isArray(data) ? data : [])
+  return extractUsersFromData(data)
 }
 
 // Returns a RegisteredUser if found. Supports two legacy formats:
